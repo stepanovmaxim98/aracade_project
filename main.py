@@ -1,5 +1,8 @@
+from email import message
 import time
 import arcade
+import csv
+import os 
 
 # --- Константы ---
 TILE_SCALING = 0.5
@@ -23,6 +26,63 @@ LAYER_NAME_COINS = "Coins"
 LAYER_NAME_BOMBS = "Bombs"
 
 
+class PlayerCharacter(arcade.Sprite):
+    """Анимированный персонаж."""
+
+    def __init__(self):
+
+        super().__init__()
+
+        self.scale = PLAYER_SCALING
+
+        # Текстуры
+        self.idle_texture = arcade.load_texture("images/hero/bunny1_stand.png")
+        self.walk1_texture = arcade.load_texture("images/hero/bunny1_walk1.png")
+        self.walk2_texture = arcade.load_texture("images/hero/bunny1_walk2.png")
+        self.jump_texture = arcade.load_texture("images/hero/bunny1_jump.png")
+
+        # Начальная текстура
+        self.texture = self.idle_texture
+
+        # Счетчик анимации
+        self.cur_texture = 0
+
+        # Направление
+        self.facing_right = True
+
+    def update_animation(self, delta_time=1 / 60):
+
+        # Поворот персонажа через scale_x
+        if self.change_x < 0:
+            self.facing_right = False
+            self.scale_x = -PLAYER_SCALING
+
+        elif self.change_x > 0:
+            self.facing_right = True
+            self.scale_x = PLAYER_SCALING
+
+        # Прыжок
+        if self.change_y != 0:
+            self.texture = self.jump_texture
+            return
+
+        # Стоит
+        if self.change_x == 0:
+            self.texture = self.idle_texture
+            return
+
+        # Анимация ходьбы
+        self.cur_texture += 1
+
+        if self.cur_texture > 20:
+            self.cur_texture = 0
+
+        if self.cur_texture < 10:
+            self.texture = self.walk1_texture
+        else:
+            self.texture = self.walk2_texture
+
+
 class GameView(arcade.View):
     """Главный класс игрового экрана."""
 
@@ -42,7 +102,7 @@ class GameView(arcade.View):
         self.physics_engine = None
         self.end_of_map = 0
         self.game_over = False
-        
+
         # Переменные для FPS и времени
         self.last_time = None
         self.frame_count = 0
@@ -52,12 +112,30 @@ class GameView(arcade.View):
         self.camera_shake = None
 
         # Звуки
-        # Загружаем звук прыжка (можно заменить на свой путь к .wav или .mp3)
-        self.jump_sound = arcade.load_sound(":resources:sounds/jump4.wav")
+        self.jump_sound = arcade.load_sound("sound/jump.mp3")
+
+        # Таймер
+        self.total_time = 120
+        self.time_left = 120
 
         # Текстовые объекты
-        self.text_fps = arcade.Text("", x=10, y=40, color=arcade.color.BLACK, font_size=14)
-        self.text_score = arcade.Text(f"Счет: {self.score}", x=10, y=20, color=arcade.color.BLACK, font_size=14)
+        self.text_fps = arcade.Text(
+            "", x=10, y=40, color=arcade.color.BLACK, font_size=14
+        )
+        self.text_score = arcade.Text(
+            f"Счет: {self.score}", x=10, y=20, color=arcade.color.BLACK, font_size=14
+        )
+        self.text_timer = arcade.Text(
+            "02:00",
+            x=WINDOW_WIDTH - 140,
+            y=WINDOW_HEIGHT - 40,
+            color=arcade.color.BLACK,
+            font_size=24,
+            bold=True,
+        )
+
+        # Проверка победы
+        self.win = False
 
     def setup(self):
         """Настройка игры и инициализация переменных. Вызывайте для перезапуска."""
@@ -77,9 +155,7 @@ class GameView(arcade.View):
         self.scene = arcade.Scene.from_tilemap(self.tile_map)
 
         # --- НАСТРОЙКА ИГРОКА ---
-        character_image = "images/hero/bunny1_stand.png"
-        
-        self.player_sprite = arcade.Sprite(character_image, scale=PLAYER_SCALING)
+        self.player_sprite = PlayerCharacter()
         self.player_sprite.center_x = 196
         self.player_sprite.center_y = 128
         self.scene.add_sprite("Player", self.player_sprite)
@@ -126,7 +202,7 @@ class GameView(arcade.View):
         self.camera_shake.update_camera()
         with self.camera.activate():
             self.scene.draw()
-        
+
         # Сбрасываем смещение тряски, чтобы оно не мешало логике слежения камеры
         self.camera_shake.readjust_camera()
 
@@ -136,17 +212,29 @@ class GameView(arcade.View):
             if self.last_time and self.frame_count % 60 == 0:
                 fps = 1.0 / (time.time() - self.last_time) * 60
                 self.text_fps.text = f"FPS: {fps:5.2f}"
-            
+
             if self.frame_count % 60 == 0:
                 self.last_time = time.time()
 
             self.text_fps.draw()
             self.text_score.draw()
+            self.text_timer.x = self.width - 140
+            self.text_timer.y = self.height - 40
+            self.text_timer.draw()
 
             if self.game_over:
+                message = "ИГРА ОКОНЧЕНА"
+
+                if self.win:
+                    message = "ПОЗДРАВЛЯЮ!"
+
                 arcade.draw_text(
-                    "ИГРА ОКОНЧЕНА", self.width / 2, self.height / 2, 
-                    arcade.color.BLACK, 30, anchor_x="center"
+                    message,
+                    self.width / 2,
+                    self.height / 2,
+                    arcade.color.BLACK,
+                    40,
+                    anchor_x="center",
                 )
 
         self.frame_count += 1
@@ -156,8 +244,8 @@ class GameView(arcade.View):
         if key == arcade.key.UP or key == arcade.key.W:
             if self.physics_engine.can_jump():
                 self.player_sprite.change_y = JUMP_SPEED
-                # ВОСПРОИЗВЕДЕНИЕ ЗВУКА
                 arcade.play_sound(self.jump_sound)
+
         elif key == arcade.key.LEFT or key == arcade.key.A:
             self.player_sprite.change_x = -MOVEMENT_SPEED
         elif key == arcade.key.RIGHT or key == arcade.key.D:
@@ -171,14 +259,14 @@ class GameView(arcade.View):
     def pan_camera_to_user(self, panning_fraction: float = 1.0):
         """Плавное слежение камеры за персонажем."""
         screen_center_x, screen_center_y = self.player_sprite.position
-        
+
         # Ограничение, чтобы камера не выходила за левый край
         if screen_center_x < self.camera.viewport_width / 2:
             screen_center_x = self.camera.viewport_width / 2
         # Ограничение для нижнего края
         if screen_center_y < self.camera.viewport_height / 2:
             screen_center_y = self.camera.viewport_height / 2
-            
+
         user_centered = screen_center_x, screen_center_y
 
         self.camera.position = arcade.math.lerp_2d(
@@ -186,14 +274,55 @@ class GameView(arcade.View):
             user_centered,
             panning_fraction,
         )
+    def save_result(self):
+        """Сохранение результата в CSV."""
+
+        file_exists = os.path.exists("results.csv")
+
+        elapsed = int(self.total_time - self.time_left)
+
+        minutes = elapsed // 60
+        seconds = elapsed % 60
+
+        time_string = f"{minutes:02d}:{seconds:02d}"
+
+        with open("results.csv", "a", newline="", encoding="utf-8") as file:
+
+            writer = csv.writer(file)
+
+            # Заголовки
+            if not file_exists:
+                writer.writerow(["date", "time", "coins"])
+
+            # Запись результата
+            writer.writerow([
+                time.strftime("%Y-%m-%d %H:%M:%S"),
+                time_string,
+                self.score
+            ])
 
     def on_update(self, delta_time):
         """Игровая логика и перемещение."""
+
+        # Таймер
+        if not self.game_over:
+            self.time_left -= delta_time
+
+        if self.time_left <= 0:
+            self.time_left = 0
+            self.game_over = True
+
+        minutes = int(self.time_left) // 60
+        seconds = int(self.time_left) % 60
+
+        self.text_timer.text = f"{minutes:02d}:{seconds:02d}"
+
         if self.player_sprite.right >= self.end_of_map:
             self.game_over = True
 
         if not self.game_over:
             self.physics_engine.update()
+            self.player_sprite.update_animation(delta_time)
             self.camera_shake.update(delta_time)
 
             # Сбор монет
@@ -203,6 +332,10 @@ class GameView(arcade.View):
             for coin in coins_hit:
                 coin.remove_from_sprite_lists()
                 self.score += 1
+                if self.score >= 15:
+                    self.win = True
+                    self.game_over = True
+                    self.save_result()
 
             # Столкновение с бомбами (активирует тряску)
             bombs_hit = arcade.check_for_collision_with_list(
